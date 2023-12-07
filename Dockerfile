@@ -1,29 +1,39 @@
-# Use an official Python runtime as a parent image
-FROM python:3.11
+# Stage 1: init
+FROM python:3.11 as init
 
-# Set the working directory in the container
+# Pass `--build-arg API_URL=http://app.example.com:8000` during build
+ARG API_URL
+
+# Copy local context to `/app` inside container (see .dockerignore)
 WORKDIR /app
+COPY . .
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+# Create virtualenv which will be copied into final container
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+RUN python3.11 -m venv $VIRTUAL_ENV
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements-dev.txt
+# Install app requirements and reflex inside virtualenv
+RUN pip install -r requirements.txt
 
-# Initialize the Reflex project
-# Note: This assumes that reflex init can be run non-interactively
+# Deploy templates and prepare app
 RUN reflex init
 
-# Make port 5000 available to the world outside this container
-EXPOSE 5000
+# Export static copy of frontend to /app/.web/_static
+RUN reflex export --frontend-only --no-zip
 
-# Command to wait for the Postgres database to be ready before starting the app
-# Install a PostgreSQL client to check for database readiness
-RUN apt-get update && apt-get install -y postgresql-client
+# Copy static files out of /app to save space in backend image
+RUN mv .web/_static /tmp/_static
+RUN rm -rf .web && mkdir .web
+RUN mv /tmp/_static .web/_static
 
-# Define a script to wait for Postgres
-RUN echo "while ! pg_isready -h postgres -p 5432; do echo 'Waiting for Postgres...'; sleep 1; done;" > ./wait-for-postgres.sh
-RUN chmod +x ./wait-for-postgres.sh
+# Stage 2: copy artifacts into slim image 
+FROM python:3.11-slim
+ARG API_URL
+WORKDIR /app
+RUN adduser --disabled-password --home /app reflex
+COPY --chown=reflex --from=init /app /app
+USER reflex
+ENV PATH="/app/.venv/bin:$PATH" API_URL=$API_URL
 
-# Run the Reflex server when the container launches
-CMD ["./wait-for-postgres.sh && reflex run"]
+CMD reflex db migrate && reflex run --env prod --backend-only
