@@ -4,7 +4,8 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "8000:8000"  # Backend port
+      - "3000:3000"  # Frontend port
     depends_on:
       - postgres
     environment:
